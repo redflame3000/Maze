@@ -432,12 +432,17 @@ export default function App() {
     const last = path[path.length - 1];
     
     // Update rotation (Rocket defaults to ~45deg top-right)
+    // If 🚀 is 45deg, then:
+    // Right (0deg): needs -45deg rotation
+    // Down (90deg): needs 45deg rotation
+    // Left (180deg): needs 135deg rotation
+    // Up (-90deg): needs -135deg rotation
     const dx = to.x - last.x;
     const dy = to.y - last.y;
-    if (dx === 1) setCarRotation(Math.PI / 4); // Right
-    else if (dx === -1) setCarRotation(-3 * Math.PI / 4); // Left
-    else if (dy === 1) setCarRotation(3 * Math.PI / 4); // Down
-    else if (dy === -1) setCarRotation(-Math.PI / 4); // Up
+    if (dx === 1) setCarRotation(-Math.PI / 4); 
+    else if (dx === -1) setCarRotation(3 * Math.PI / 4);
+    else if (dy === 1) setCarRotation(Math.PI / 4);
+    else if (dy === -1) setCarRotation(-3 * Math.PI / 4);
 
     // Backtracking
     if (path.length > 1 && path[path.length - 2].x === to.x && path[path.length - 2].y === to.y) {
@@ -593,16 +598,36 @@ export default function App() {
 
       if (dist > 5) { // Deadzone check
         const head = path[path.length - 1];
-        let next: Point | null = null;
         
-        // Direction logic (45-degree split)
-        if (Math.abs(dx) > Math.abs(dy)) {
-          next = { x: head.x + (dx > 0 ? 1 : -1), y: head.y };
+        const absDx = Math.abs(dx);
+        const absDy = Math.abs(dy);
+        
+        // Determine primary and secondary intent
+        const isHorizontalPrimary = absDx > absDy;
+        const primaryNext = isHorizontalPrimary 
+          ? { x: head.x + (dx > 0 ? 1 : -1), y: head.y }
+          : { x: head.x, y: head.y + (dy > 0 ? 1 : -1) };
+          
+        const secondaryNext = isHorizontalPrimary
+          ? { x: head.x, y: head.y + (dy > 0 ? 1 : -1) }
+          : { x: head.x + (dx > 0 ? 1 : -1), y: head.y };
+
+        const secondaryMagnitude = isHorizontalPrimary ? absDy : absDx;
+        const primaryMagnitude = isHorizontalPrimary ? absDx : absDy;
+
+        // SMART TURNING LOGIC:
+        // 1. If primary direction is valid, go there.
+        // 2. If primary is blocked BUT secondary is valid AND user is pointing significantly towards it, go secondary.
+        // This creates a "sliding" effect into holes.
+        if (isValidMove(head, primaryNext)) {
+          handleMove(primaryNext);
+        } else if (secondaryMagnitude > primaryMagnitude * 0.25 && isValidMove(head, secondaryNext)) {
+          // User is pointing somewhat diagonally and the side path is open while front is blocked
+          handleMove(secondaryNext);
         } else {
-          next = { x: head.x, y: head.y + (dy > 0 ? 1 : -1) };
+          // Both blocked or user not pointing enough to secondary, still try primary to show collision
+          handleMove(primaryNext);
         }
-        
-        if (next) handleMove(next);
 
         // Calculate next delay based on distance (Analog Speed)
         // dist ranges from 5 (deadzone) to ~40 (visual limit)
@@ -1155,11 +1180,15 @@ export default function App() {
                   <motion.div 
                     animate={{ 
                       x: Math.max(-40, Math.min(40, joystickPos.x - joystickBase.x)),
-                      y: Math.max(-40, Math.min(40, joystickPos.y - joystickBase.y))
+                      y: Math.max(-40, Math.min(40, joystickPos.y - joystickBase.y)),
+                      scale: joystickActive ? 1.1 : 1,
+                      boxShadow: joystickActive ? '0 0 20px rgba(16, 185, 129, 0.4)' : '0 0 0px rgba(16, 185, 129, 0)'
                     }}
                     transition={{ type: 'spring', damping: 15, stiffness: 200 }}
-                    className="w-12 h-12 bg-emerald-500/80 shadow-lg shadow-emerald-500/20 rounded-full border border-white/40"
-                  />
+                    className="w-12 h-12 bg-emerald-500/80 rounded-full border border-white/40 flex items-center justify-center"
+                  >
+                    <div className="w-2 h-2 bg-white/60 rounded-full" />
+                  </motion.div>
                 </div>
               </div>
             )}
