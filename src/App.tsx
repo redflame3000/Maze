@@ -579,33 +579,51 @@ export default function App() {
   const joystickIntervalRef = useRef<number | null>(null);
 
   useEffect(() => {
-    if (joystickActive && !isWon && !isPaused && !showMenu) {
-      joystickIntervalRef.current = window.setInterval(() => {
-        const dx = joystickPosRef.current.x - joystickBase.x;
-        const dy = joystickPosRef.current.y - joystickBase.y;
-        const dist = Math.sqrt(dx * dx + dy * dy);
+    let timeoutId: number | null = null;
+    
+    const moveLoop = () => {
+      if (!joystickActive || isWon || isPaused || showMenu) return;
+
+      const dx = joystickPosRef.current.x - joystickBase.x;
+      const dy = joystickPosRef.current.y - joystickBase.y;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      
+      let nextDelay = 120; // Default fallback
+
+      if (dist > 5) { // Deadzone check
+        const head = path[path.length - 1];
+        let next: Point | null = null;
         
-        if (dist > 5) { // Lower deadzone for better sensitivity
-          const head = path[path.length - 1];
-          let next: Point | null = null;
-          
-          // Precise 45-degree split logic
-          // If abs(dx) > abs(dy), it's a horizontal move
-          // If abs(dy) > abs(dx), it's a vertical move
-          if (Math.abs(dx) > Math.abs(dy)) {
-            next = { x: head.x + (dx > 0 ? 1 : -1), y: head.y };
-          } else {
-            next = { x: head.x, y: head.y + (dy > 0 ? 1 : -1) };
-          }
-          
-          if (next) handleMove(next);
+        // Direction logic (45-degree split)
+        if (Math.abs(dx) > Math.abs(dy)) {
+          next = { x: head.x + (dx > 0 ? 1 : -1), y: head.y };
+        } else {
+          next = { x: head.x, y: head.y + (dy > 0 ? 1 : -1) };
         }
-      }, 120); // Faster response
-    } else {
-      if (joystickIntervalRef.current) clearInterval(joystickIntervalRef.current);
+        
+        if (next) handleMove(next);
+
+        // Calculate next delay based on distance (Analog Speed)
+        // dist ranges from 5 (deadzone) to ~40 (visual limit)
+        const maxSpeedDist = 40;
+        const minDelay = 80;   // Fastest speed (ms per step)
+        const maxDelay = 350;  // Slowest speed (ms per step)
+        
+        const ratio = Math.min(1, Math.max(0, (dist - 5) / (maxSpeedDist - 5)));
+        nextDelay = maxDelay - (maxDelay - minDelay) * ratio;
+      } else {
+        nextDelay = 100; // Still active but in deadzone, check again soon
+      }
+
+      timeoutId = window.setTimeout(moveLoop, nextDelay);
+    };
+
+    if (joystickActive && !isWon && !isPaused && !showMenu) {
+      moveLoop();
     }
+
     return () => {
-      if (joystickIntervalRef.current) clearInterval(joystickIntervalRef.current);
+      if (timeoutId) clearTimeout(timeoutId);
     };
   }, [joystickActive, joystickBase, isWon, isPaused, showMenu, path, handleMove]);
 
