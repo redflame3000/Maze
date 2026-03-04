@@ -431,18 +431,14 @@ export default function App() {
 
     const last = path[path.length - 1];
     
-    // Update rotation (Rocket defaults to ~45deg top-right)
-    // If 🚀 is 45deg, then:
-    // Right (0deg): needs -45deg rotation
-    // Down (90deg): needs 45deg rotation
-    // Left (180deg): needs 135deg rotation
-    // Up (-90deg): needs -135deg rotation
     const dx = to.x - last.x;
     const dy = to.y - last.y;
-    if (dx === 1) setCarRotation(-Math.PI / 4); 
-    else if (dx === -1) setCarRotation(3 * Math.PI / 4);
-    else if (dy === 1) setCarRotation(Math.PI / 4);
-    else if (dy === -1) setCarRotation(-3 * Math.PI / 4);
+
+    // Update rotation (Rocket defaults to ~45deg top-right, which is -PI/4 radians)
+    // To point it to 'angle', we rotate by 'angle + PI/4'
+    // This is updated even for invalid moves or backtracking to show player intent
+    const angle = Math.atan2(dy, dx);
+    setCarRotation(angle + Math.PI / 4);
 
     // Backtracking
     if (path.length > 1 && path[path.length - 2].x === to.x && path[path.length - 2].y === to.y) {
