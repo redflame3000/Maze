@@ -302,17 +302,27 @@ export default function App() {
   const [isWon, setIsWon] = useState(false);
   const [gameStarted, setGameStarted] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
+  const [isMobile, setIsMobile] = useState(false);
+  const [joystickActive, setJoystickActive] = useState(false);
+  const [joystickPos, setJoystickPos] = useState({ x: 0, y: 0 });
+  const [joystickBase, setJoystickBase] = useState({ x: 0, y: 0 });
   const [showMenu, setShowMenu] = useState(false);
   const [failedMove, setFailedMove] = useState<Point | null>(null);
   const [lastFailedMove, setLastFailedMove] = useState<Point | null>(null);
   const [isRepeatedCollision, setIsRepeatedCollision] = useState(false);
   const [carRotation, setCarRotation] = useState(Math.PI / 4); // Initial rotation for Rocket
 
+  // Classic Maze Data
+  const [classicMaze, setClassicMaze] = useState<Cell[][]>([]);
+  const [classicRevealed, setClassicRevealed] = useState<boolean[][]>([]);
+  const [distanceTraveled, setDistanceTraveled] = useState(0);
+  const chunkStore = useRef<Map<string, Chunk>>(new Map());
+
   // Audio Context
   const audioCtx = useRef<AudioContext | null>(null);
   const failedMoveTimeoutRef = useRef<number | null>(null);
 
-  const playSound = (type: 'engine' | 'hit' | 'win') => {
+  const playSound = useCallback((type: 'engine' | 'hit' | 'win') => {
     if (!audioCtx.current) {
       audioCtx.current = new (window.AudioContext || (window as any).webkitAudioContext)();
     }
@@ -343,15 +353,170 @@ export default function App() {
     gain.connect(ctx.destination);
     osc.start();
     osc.stop(ctx.currentTime + (type === 'win' ? 0.5 : 0.2));
-  };
+  }, []);
 
-  // Classic Maze Data
-  const [classicMaze, setClassicMaze] = useState<Cell[][]>([]);
-  const [classicRevealed, setClassicRevealed] = useState<boolean[][]>([]);
+  // --- Validation & Movement ---
 
-  // Infinite Maze Data
-  const chunkStore = useRef<Map<string, Chunk>>(new Map());
-  const [distanceTraveled, setDistanceTraveled] = useState(0);
+  const getChunkCoords = useCallback((x: number, y: number) => {
+    return {
+      cx: Math.floor(x / CHUNK_SIZE),
+      cy: Math.floor(y / CHUNK_SIZE),
+      lx: ((x % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE,
+      ly: ((y % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE,
+    };
+  }, []);
+
+  const getOrGenChunk = useCallback((cx: number, cy: number) => {
+    const key = `${cx},${cy}`;
+    if (!chunkStore.current.has(key)) {
+      chunkStore.current.set(key, generateChunk(cx, cy, seed));
+    }
+    return chunkStore.current.get(key)!;
+  }, [seed]);
+
+  const isValidMove = useCallback((from: Point, to: Point) => {
+    const dx = to.x - from.x;
+    const dy = to.y - from.y;
+    
+    // Must be adjacent
+    if (Math.abs(dx) + Math.abs(dy) !== 1) return false;
+
+    let cell: Cell | null = null;
+    let targetCell: Cell | null = null;
+
+    if (mode === 'classic') {
+      if (to.x < 0 || to.x >= mazeSize || to.y < 0 || to.y >= mazeSize) return false;
+      cell = classicMaze[from.y][from.x];
+      targetCell = classicMaze[to.y][to.x];
+    } else {
+      const fromCoords = getChunkCoords(from.x, from.y);
+      const toCoords = getChunkCoords(to.x, to.y);
+      cell = getOrGenChunk(fromCoords.cx, fromCoords.cy).cells[fromCoords.ly][fromCoords.lx];
+      targetCell = getOrGenChunk(toCoords.cx, toCoords.cy).cells[toCoords.ly][toCoords.lx];
+    }
+
+    // Check walls (check both sides for consistency)
+    if (dx === 1 && ((cell.walls & Wall.RIGHT) || (targetCell.walls & Wall.LEFT))) return false;
+    if (dx === -1 && ((cell.walls & Wall.LEFT) || (targetCell.walls & Wall.RIGHT))) return false;
+    if (dy === 1 && ((cell.walls & Wall.BOTTOM) || (targetCell.walls & Wall.TOP))) return false;
+    if (dy === -1 && ((cell.walls & Wall.TOP) || (targetCell.walls & Wall.BOTTOM))) return false;
+
+    // Check decorations (obstacles)
+    if (targetCell.decoration) {
+      const repeated = lastFailedMove && lastFailedMove.x === to.x && lastFailedMove.y === to.y;
+      setIsRepeatedCollision(!!repeated);
+      setFailedMove(to);
+      setLastFailedMove(to);
+      playSound('hit');
+      
+      if (failedMoveTimeoutRef.current) {
+        clearTimeout(failedMoveTimeoutRef.current);
+      }
+      
+      failedMoveTimeoutRef.current = window.setTimeout(() => {
+        setFailedMove(null);
+        failedMoveTimeoutRef.current = null;
+      }, 800); // Slightly longer for better visibility
+      
+      return false;
+    }
+
+    return true;
+  }, [mode, mazeSize, classicMaze, lastFailedMove, getChunkCoords, getOrGenChunk, playSound]);
+
+  const handleMove = useCallback((to: Point) => {
+    if (isWon) return;
+
+    const last = path[path.length - 1];
+    
+    // Update rotation (Rocket defaults to ~45deg top-right)
+    const dx = to.x - last.x;
+    const dy = to.y - last.y;
+    if (dx === 1) setCarRotation(Math.PI / 4); // Right
+    else if (dx === -1) setCarRotation(-3 * Math.PI / 4); // Left
+    else if (dy === 1) setCarRotation(3 * Math.PI / 4); // Down
+    else if (dy === -1) setCarRotation(-Math.PI / 4); // Up
+
+    // Backtracking
+    if (path.length > 1 && path[path.length - 2].x === to.x && path[path.length - 2].y === to.y) {
+      setPath(p => p.slice(0, -1));
+      playSound('engine');
+      setLastFailedMove(null); // Reset failure tracking on successful move
+      setIsRepeatedCollision(false);
+      return;
+    }
+
+    // New Step
+    if (isValidMove(last, to)) {
+      // Check if already in path (no loops)
+      if (path.some(p => p.x === to.x && p.y === to.y)) return;
+
+      if (!gameStarted) setGameStarted(true);
+
+      const newPath = [...path, to];
+      setPath(newPath);
+      setSteps(s => s + 1);
+      playSound('engine');
+      setLastFailedMove(null); // Reset failure tracking on successful move
+      setIsRepeatedCollision(false);
+
+      if (mode === 'classic') {
+        // Reveal
+        const newRevealed = [...classicRevealed];
+        const radius = 1;
+        for (let rdy = -radius; rdy <= radius; rdy++) {
+          for (let rdx = -radius; rdx <= radius; rdx++) {
+            const nx = to.x + rdx;
+            const ny = to.y + rdy;
+            if (nx >= 0 && nx < mazeSize && ny >= 0 && ny < mazeSize) {
+              newRevealed[ny][nx] = true;
+            }
+          }
+        }
+        setClassicRevealed(newRevealed);
+
+        // Win check
+        if (to.x === mazeSize - 1 && to.y === mazeSize - 1) {
+          setIsWon(true);
+          playSound('win');
+        }
+      } else {
+        // revealInfinite logic inline to avoid dependency issues
+        const radius = 1;
+        for (let rdy = -radius; rdy <= radius; rdy++) {
+          for (let rdx = -radius; rdx <= radius; rdx++) {
+            const nx = to.x + rdx;
+            const ny = to.y + rdy;
+            const coords = getChunkCoords(nx, ny);
+            const chunk = getOrGenChunk(coords.cx, coords.cy);
+            chunk.revealed[coords.ly][coords.lx] = true;
+          }
+        }
+
+        const dist = Math.sqrt(to.x * to.x + to.y * to.y);
+        setDistanceTraveled(Math.max(distanceTraveled, Math.floor(dist)));
+        
+        // Infinite mode goal: reach 200 distance
+        if (dist >= 200) {
+          setIsWon(true);
+          playSound('win');
+        }
+      }
+    }
+  }, [isWon, path, isValidMove, gameStarted, mode, mazeSize, classicRevealed, distanceTraveled, playSound, getChunkCoords, getOrGenChunk]);
+
+  const revealInfinite = useCallback((x: number, y: number) => {
+    const radius = 1;
+    for (let dy = -radius; dy <= radius; dy++) {
+      for (let dx = -radius; dx <= radius; dx++) {
+        const nx = x + dx;
+        const ny = y + dy;
+        const coords = getChunkCoords(nx, ny);
+        const chunk = getOrGenChunk(coords.cx, coords.cy);
+        chunk.revealed[coords.ly][coords.lx] = true;
+      }
+    }
+  }, [getChunkCoords, getOrGenChunk]);
 
   // Refs
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -401,6 +566,45 @@ export default function App() {
     initGame(seed);
   }, [mode, mazeSize]);
 
+  useEffect(() => {
+    const checkMobile = () => {
+      setIsMobile(window.innerWidth < 1024 || 'ontouchstart' in window);
+    };
+    checkMobile();
+    window.addEventListener('resize', checkMobile);
+    return () => window.removeEventListener('resize', checkMobile);
+  }, []);
+
+  const joystickIntervalRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (joystickActive && !isWon && !isPaused && !showMenu) {
+      joystickIntervalRef.current = window.setInterval(() => {
+        const dx = joystickPos.x - joystickBase.x;
+        const dy = joystickPos.y - joystickBase.y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        
+        if (dist > 10) {
+          const head = path[path.length - 1];
+          let next: Point | null = null;
+          
+          if (Math.abs(dx) > Math.abs(dy)) {
+            next = { x: head.x + Math.sign(dx), y: head.y };
+          } else {
+            next = { x: head.x, y: head.y + Math.sign(dy) };
+          }
+          
+          if (next) handleMove(next);
+        }
+      }, 150); // Control movement speed
+    } else {
+      if (joystickIntervalRef.current) clearInterval(joystickIntervalRef.current);
+    }
+    return () => {
+      if (joystickIntervalRef.current) clearInterval(joystickIntervalRef.current);
+    };
+  }, [joystickActive, joystickPos, joystickBase, isWon, isPaused, showMenu, path, handleMove]);
+
   // --- Timer ---
 
   useEffect(() => {
@@ -415,159 +619,6 @@ export default function App() {
       if (timerRef.current) clearInterval(timerRef.current);
     };
   }, [gameStarted, isWon]);
-
-  // --- Infinite Mode Helpers ---
-
-  const getChunkCoords = (x: number, y: number) => {
-    return {
-      cx: Math.floor(x / CHUNK_SIZE),
-      cy: Math.floor(y / CHUNK_SIZE),
-      lx: ((x % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE,
-      ly: ((y % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE,
-    };
-  };
-
-  const getOrGenChunk = (cx: number, cy: number): Chunk => {
-    const key = `${cx},${cy}`;
-    if (!chunkStore.current.has(key)) {
-      chunkStore.current.set(key, generateChunk(cx, cy, seed));
-    }
-    return chunkStore.current.get(key)!;
-  };
-
-  const revealInfinite = (x: number, y: number) => {
-    const radius = 1;
-    for (let dy = -radius; dy <= radius; dy++) {
-      for (let dx = -radius; dx <= radius; dx++) {
-        const nx = x + dx;
-        const ny = y + dy;
-        const { cx, cy, lx, ly } = getChunkCoords(nx, ny);
-        const chunk = getOrGenChunk(cx, cy);
-        chunk.revealed[ly][lx] = true;
-      }
-    }
-  };
-
-  // --- Validation & Movement ---
-
-  const isValidMove = (from: Point, to: Point) => {
-    const dx = to.x - from.x;
-    const dy = to.y - from.y;
-    
-    // Must be adjacent
-    if (Math.abs(dx) + Math.abs(dy) !== 1) return false;
-
-    let cell: Cell | null = null;
-    let targetCell: Cell | null = null;
-
-    if (mode === 'classic') {
-      if (to.x < 0 || to.x >= mazeSize || to.y < 0 || to.y >= mazeSize) return false;
-      cell = classicMaze[from.y][from.x];
-      targetCell = classicMaze[to.y][to.x];
-    } else {
-      const fromCoords = getChunkCoords(from.x, from.y);
-      const toCoords = getChunkCoords(to.x, to.y);
-      cell = getOrGenChunk(fromCoords.cx, fromCoords.cy).cells[fromCoords.ly][fromCoords.lx];
-      targetCell = getOrGenChunk(toCoords.cx, toCoords.cy).cells[toCoords.ly][toCoords.lx];
-    }
-
-    // Check walls (check both sides for consistency)
-    if (dx === 1 && ((cell.walls & Wall.RIGHT) || (targetCell.walls & Wall.LEFT))) return false;
-    if (dx === -1 && ((cell.walls & Wall.LEFT) || (targetCell.walls & Wall.RIGHT))) return false;
-    if (dy === 1 && ((cell.walls & Wall.BOTTOM) || (targetCell.walls & Wall.TOP))) return false;
-    if (dy === -1 && ((cell.walls & Wall.TOP) || (targetCell.walls & Wall.BOTTOM))) return false;
-
-    // Check decorations (obstacles)
-    if (targetCell.decoration) {
-      const repeated = lastFailedMove && lastFailedMove.x === to.x && lastFailedMove.y === to.y;
-      setIsRepeatedCollision(!!repeated);
-      setFailedMove(to);
-      setLastFailedMove(to);
-      playSound('hit');
-      
-      if (failedMoveTimeoutRef.current) {
-        clearTimeout(failedMoveTimeoutRef.current);
-      }
-      
-      failedMoveTimeoutRef.current = window.setTimeout(() => {
-        setFailedMove(null);
-        failedMoveTimeoutRef.current = null;
-      }, 800); // Slightly longer for better visibility
-      
-      return false;
-    }
-
-    return true;
-  };
-
-  const handleMove = (to: Point) => {
-    if (isWon) return;
-
-    const last = path[path.length - 1];
-    
-    // Update rotation (Rocket defaults to ~45deg top-right)
-    const dx = to.x - last.x;
-    const dy = to.y - last.y;
-    if (dx === 1) setCarRotation(Math.PI / 4); // Right
-    else if (dx === -1) setCarRotation(-3 * Math.PI / 4); // Left
-    else if (dy === 1) setCarRotation(3 * Math.PI / 4); // Down
-    else if (dy === -1) setCarRotation(-Math.PI / 4); // Up
-
-    // Backtracking
-    if (path.length > 1 && path[path.length - 2].x === to.x && path[path.length - 2].y === to.y) {
-      setPath(p => p.slice(0, -1));
-      playSound('engine');
-      setLastFailedMove(null); // Reset failure tracking on successful move
-      setIsRepeatedCollision(false);
-      return;
-    }
-
-    // New Step
-    if (isValidMove(last, to)) {
-      // Check if already in path (no loops)
-      if (path.some(p => p.x === to.x && p.y === to.y)) return;
-
-      if (!gameStarted) setGameStarted(true);
-
-      const newPath = [...path, to];
-      setPath(newPath);
-      setSteps(s => s + 1);
-      playSound('engine');
-      setLastFailedMove(null); // Reset failure tracking on successful move
-      setIsRepeatedCollision(false);
-
-      if (mode === 'classic') {
-        // Reveal
-        const newRevealed = [...classicRevealed];
-        const radius = 1;
-        for (let dy = -radius; dy <= radius; dy++) {
-          for (let dx = -radius; dx <= radius; dx++) {
-            const nx = to.x + dx;
-            const ny = to.y + dy;
-            if (nx >= 0 && nx < mazeSize && ny >= 0 && ny < mazeSize) {
-              newRevealed[ny][nx] = true;
-            }
-          }
-        }
-        setClassicRevealed(newRevealed);
-
-        // Win check
-        if (to.x === mazeSize - 1 && to.y === mazeSize - 1) {
-          setIsWon(true);
-          playSound('win');
-        }
-      } else {
-        revealInfinite(to.x, to.y);
-        const dist = Math.sqrt(to.x * to.x + to.y * to.y);
-        setDistanceTraveled(Math.max(distanceTraveled, Math.floor(dist)));
-        
-        // Infinite mode goal: reach 200 distance
-        if (dist >= 200) {
-          setIsWon(true);
-        }
-      }
-    }
-  };
 
   const [showSolution, setShowSolution] = useState(false);
   const [particles, setParticles] = useState<{x: number, y: number, vx: number, vy: number, color: string, life: number}[]>([]);
@@ -662,6 +713,11 @@ export default function App() {
     ctx.scale(dpr, dpr);
     ctx.clearRect(0, 0, width, height);
 
+    // Safe area for joystick on mobile (bottom left)
+    const joystickAreaSize = isMobile ? 120 : 0;
+    const drawWidth = width;
+    const drawHeight = height - (isMobile ? 80 : 0); // Leave some space at bottom
+
     const head = path[path.length - 1];
     
     // Camera
@@ -671,13 +727,13 @@ export default function App() {
 
     if (mode === 'classic') {
       const mazeSizePx = mazeSize * CELL_SIZE;
-      scale = Math.min(width / mazeSizePx, height / mazeSizePx) * 0.95;
-      offsetX = (width - mazeSizePx * scale) / 2;
-      offsetY = (height - mazeSizePx * scale) / 2;
+      scale = Math.min(drawWidth / mazeSizePx, drawHeight / mazeSizePx) * 0.95;
+      offsetX = (drawWidth - mazeSizePx * scale) / 2;
+      offsetY = (drawHeight - mazeSizePx * scale) / 2;
     } else {
       scale = 1.2;
-      offsetX = width / 2 - head.x * CELL_SIZE * scale;
-      offsetY = height / 2 - head.y * CELL_SIZE * scale;
+      offsetX = drawWidth / 2 - head.x * CELL_SIZE * scale;
+      offsetY = drawHeight / 2 - head.y * CELL_SIZE * scale;
     }
 
     ctx.save();
@@ -961,6 +1017,10 @@ export default function App() {
   };
 
   const handlePointerUp = () => {
+    if (joystickActive) {
+      setJoystickActive(false);
+      return;
+    }
     if (lastPointerPos.current && pointerStartTime.current > 0) {
       const duration = Date.now() - pointerStartTime.current;
       if (duration < 250 && path.length > 1) {
@@ -1032,6 +1092,48 @@ export default function App() {
           className="block w-full h-full cursor-crosshair"
           style={{ touchAction: 'none' }}
         />
+
+        {/* Virtual Joystick for Mobile */}
+        {isMobile && (
+          <div 
+            className="absolute bottom-8 left-8 w-32 h-32 flex items-center justify-center z-30"
+            onPointerDown={(e) => {
+              e.stopPropagation();
+              const rect = e.currentTarget.getBoundingClientRect();
+              const bx = rect.left + rect.width / 2;
+              const by = rect.top + rect.height / 2;
+              setJoystickBase({ x: bx, y: by });
+              setJoystickPos({ x: e.clientX, y: e.clientY });
+              setJoystickActive(true);
+            }}
+            onPointerMove={(e) => {
+              if (joystickActive) {
+                e.stopPropagation();
+                setJoystickPos({ x: e.clientX, y: e.clientY });
+              }
+            }}
+          >
+            {/* Joystick Base */}
+            <div className="w-24 h-24 bg-white/10 backdrop-blur-md border border-white/20 rounded-full flex items-center justify-center">
+              {/* Joystick Handle */}
+              <motion.div 
+                animate={{ 
+                  x: joystickActive ? Math.max(-40, Math.min(40, joystickPos.x - joystickBase.x)) : 0,
+                  y: joystickActive ? Math.max(-40, Math.min(40, joystickPos.y - joystickBase.y)) : 0
+                }}
+                transition={{ type: 'spring', damping: 15, stiffness: 200 }}
+                className="w-12 h-12 bg-emerald-500/80 shadow-lg shadow-emerald-500/20 rounded-full border border-white/40"
+              />
+            </div>
+            
+            {/* Visual Hint */}
+            {!joystickActive && (
+              <div className="absolute -top-8 left-1/2 -translate-x-1/2 text-[10px] font-bold text-white/40 uppercase tracking-widest animate-pulse whitespace-nowrap">
+                按住此处控制方向
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Floating Controls - Moved to bottom right */}
         <div className="absolute bottom-6 right-6 flex items-center gap-2 p-1.5 bg-black/60 backdrop-blur-xl border border-white/10 rounded-2xl shadow-2xl">
