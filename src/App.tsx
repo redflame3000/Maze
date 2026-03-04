@@ -979,7 +979,7 @@ export default function App() {
   };
 
   return (
-    <div className="fixed inset-0 bg-neutral-950 text-white font-sans overflow-hidden flex flex-col select-none">
+    <div className="fixed inset-0 h-[100dvh] w-screen bg-neutral-950 text-white font-sans overflow-hidden flex flex-col select-none">
       {/* Top Bar */}
       <header className="h-16 border-b border-white/10 bg-black/40 backdrop-blur-md flex items-center justify-between px-4 z-20">
         <div className="flex items-center gap-3">
@@ -1021,14 +1021,14 @@ export default function App() {
       </header>
 
       {/* Main Game Area */}
-      <main className="flex-1 relative touch-none">
+      <main className="flex-1 relative touch-none overflow-hidden min-h-0">
         <canvas 
           ref={canvasRef}
           onPointerDown={handlePointerDown}
           onPointerMove={handlePointerMove}
           onPointerUp={handlePointerUp}
           onPointerCancel={handlePointerUp}
-          className="w-full h-full cursor-crosshair"
+          className="block w-full h-full cursor-crosshair"
           style={{ touchAction: 'none' }}
         />
 
