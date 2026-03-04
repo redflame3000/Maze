@@ -307,6 +307,7 @@ export default function App() {
   const [joystickPos, setJoystickPos] = useState({ x: 0, y: 0 });
   const joystickPosRef = useRef({ x: 0, y: 0 });
   const [joystickBase, setJoystickBase] = useState({ x: 0, y: 0 });
+  const joystickContainerRef = useRef<HTMLDivElement>(null);
   const [showMenu, setShowMenu] = useState(false);
   const [failedMove, setFailedMove] = useState<Point | null>(null);
   const [lastFailedMove, setLastFailedMove] = useState<Point | null>(null);
@@ -1115,17 +1116,15 @@ export default function App() {
           style={{ touchAction: 'none' }}
         />
 
-        {/* Virtual Joystick for Mobile */}
+        {/* Virtual Joystick for Mobile (Floating) */}
         {isMobile && (
           <div 
-            className="absolute bottom-8 left-8 w-32 h-32 flex items-center justify-center z-30"
+            ref={joystickContainerRef}
+            className="absolute inset-y-0 left-0 w-1/2 z-30 touch-none"
             onPointerDown={(e) => {
               e.stopPropagation();
-              const rect = e.currentTarget.getBoundingClientRect();
-              const bx = rect.left + rect.width / 2;
-              const by = rect.top + rect.height / 2;
-              setJoystickBase({ x: bx, y: by });
               const pos = { x: e.clientX, y: e.clientY };
+              setJoystickBase(pos);
               setJoystickPos(pos);
               joystickPosRef.current = pos;
               setJoystickActive(true);
@@ -1138,24 +1137,37 @@ export default function App() {
                 joystickPosRef.current = pos;
               }
             }}
+            onPointerUp={() => setJoystickActive(false)}
+            onPointerCancel={() => setJoystickActive(false)}
           >
-            {/* Joystick Base */}
-            <div className="w-24 h-24 bg-white/10 backdrop-blur-md border border-white/20 rounded-full flex items-center justify-center">
-              {/* Joystick Handle */}
-              <motion.div 
-                animate={{ 
-                  x: joystickActive ? Math.max(-40, Math.min(40, joystickPos.x - joystickBase.x)) : 0,
-                  y: joystickActive ? Math.max(-40, Math.min(40, joystickPos.y - joystickBase.y)) : 0
+            {joystickActive && (
+              <div 
+                className="absolute flex items-center justify-center pointer-events-none"
+                style={{ 
+                  left: joystickBase.x - (joystickContainerRef.current?.getBoundingClientRect().left || 0), 
+                  top: joystickBase.y - (joystickContainerRef.current?.getBoundingClientRect().top || 0),
+                  transform: 'translate(-50%, -50%)' 
                 }}
-                transition={{ type: 'spring', damping: 15, stiffness: 200 }}
-                className="w-12 h-12 bg-emerald-500/80 shadow-lg shadow-emerald-500/20 rounded-full border border-white/40"
-              />
-            </div>
+              >
+                {/* Joystick Base */}
+                <div className="w-24 h-24 bg-white/10 backdrop-blur-md border border-white/20 rounded-full flex items-center justify-center">
+                  {/* Joystick Handle */}
+                  <motion.div 
+                    animate={{ 
+                      x: Math.max(-40, Math.min(40, joystickPos.x - joystickBase.x)),
+                      y: Math.max(-40, Math.min(40, joystickPos.y - joystickBase.y))
+                    }}
+                    transition={{ type: 'spring', damping: 15, stiffness: 200 }}
+                    className="w-12 h-12 bg-emerald-500/80 shadow-lg shadow-emerald-500/20 rounded-full border border-white/40"
+                  />
+                </div>
+              </div>
+            )}
             
             {/* Visual Hint */}
             {!joystickActive && (
-              <div className="absolute -top-8 left-1/2 -translate-x-1/2 text-[10px] font-bold text-white/40 uppercase tracking-widest animate-pulse whitespace-nowrap">
-                按住此处控制方向
+              <div className="absolute bottom-12 left-12 text-[10px] font-bold text-white/40 uppercase tracking-widest animate-pulse whitespace-nowrap">
+                在左侧区域按住控制方向
               </div>
             )}
           </div>
