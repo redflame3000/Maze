@@ -305,6 +305,7 @@ export default function App() {
   const [isMobile, setIsMobile] = useState(false);
   const [joystickActive, setJoystickActive] = useState(false);
   const [joystickPos, setJoystickPos] = useState({ x: 0, y: 0 });
+  const joystickPosRef = useRef({ x: 0, y: 0 });
   const [joystickBase, setJoystickBase] = useState({ x: 0, y: 0 });
   const [showMenu, setShowMenu] = useState(false);
   const [failedMove, setFailedMove] = useState<Point | null>(null);
@@ -580,30 +581,33 @@ export default function App() {
   useEffect(() => {
     if (joystickActive && !isWon && !isPaused && !showMenu) {
       joystickIntervalRef.current = window.setInterval(() => {
-        const dx = joystickPos.x - joystickBase.x;
-        const dy = joystickPos.y - joystickBase.y;
+        const dx = joystickPosRef.current.x - joystickBase.x;
+        const dy = joystickPosRef.current.y - joystickBase.y;
         const dist = Math.sqrt(dx * dx + dy * dy);
         
-        if (dist > 10) {
+        if (dist > 5) { // Lower deadzone for better sensitivity
           const head = path[path.length - 1];
           let next: Point | null = null;
           
+          // Precise 45-degree split logic
+          // If abs(dx) > abs(dy), it's a horizontal move
+          // If abs(dy) > abs(dx), it's a vertical move
           if (Math.abs(dx) > Math.abs(dy)) {
-            next = { x: head.x + Math.sign(dx), y: head.y };
+            next = { x: head.x + (dx > 0 ? 1 : -1), y: head.y };
           } else {
-            next = { x: head.x, y: head.y + Math.sign(dy) };
+            next = { x: head.x, y: head.y + (dy > 0 ? 1 : -1) };
           }
           
           if (next) handleMove(next);
         }
-      }, 150); // Control movement speed
+      }, 120); // Faster response
     } else {
       if (joystickIntervalRef.current) clearInterval(joystickIntervalRef.current);
     }
     return () => {
       if (joystickIntervalRef.current) clearInterval(joystickIntervalRef.current);
     };
-  }, [joystickActive, joystickPos, joystickBase, isWon, isPaused, showMenu, path, handleMove]);
+  }, [joystickActive, joystickBase, isWon, isPaused, showMenu, path, handleMove]);
 
   // --- Timer ---
 
@@ -1103,13 +1107,17 @@ export default function App() {
               const bx = rect.left + rect.width / 2;
               const by = rect.top + rect.height / 2;
               setJoystickBase({ x: bx, y: by });
-              setJoystickPos({ x: e.clientX, y: e.clientY });
+              const pos = { x: e.clientX, y: e.clientY };
+              setJoystickPos(pos);
+              joystickPosRef.current = pos;
               setJoystickActive(true);
             }}
             onPointerMove={(e) => {
               if (joystickActive) {
                 e.stopPropagation();
-                setJoystickPos({ x: e.clientX, y: e.clientY });
+                const pos = { x: e.clientX, y: e.clientY };
+                setJoystickPos(pos);
+                joystickPosRef.current = pos;
               }
             }}
           >
