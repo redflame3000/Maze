@@ -658,6 +658,7 @@ export default function App() {
       canvas.height = height * dpr;
     }
     
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.scale(dpr, dpr);
     ctx.clearRect(0, 0, width, height);
 
